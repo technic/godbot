@@ -280,10 +280,13 @@ def main() -> None:
 
     # Start the bot
     if os.getenv('APP_ENVIRONMENT', '') == 'dev':
+        logger.info('Start polling')
         updater.start_polling()
     else:
-        updater.start_webhook(
-            port=8080, url_path='https://godbot.fly.dev/' + os.environ['TELEGRAM_TOKEN'])
+        logger.info('Starting webhook')
+        hook = os.environ['TELEGRAM_HOOK']
+        updater.start_webhook('0.0.0.0', port=8080, url_path=hook,
+                              webhook_url=f'https://godbot.fly.dev/{hook}')
     updater.idle()
 
 
