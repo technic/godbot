@@ -2,14 +2,16 @@ from io import BytesIO
 import os
 import re
 from typing import Optional, Tuple
+from dataclasses import dataclass
 import logging
 import requests
-from telegram import MessageEntity, Update
-from telegram.ext import CommandHandler, Updater, CallbackContext, MessageHandler, Filters
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, MessageEntity, ParseMode, Update
+from telegram.ext import CommandHandler, Updater, CallbackContext, MessageHandler, Filters, CallbackQueryHandler
 from semver import Version
 from pprint import pformat
 import json
 from dotenv import load_dotenv
+from enum import Flag, auto
 
 # Set up logging
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -17,15 +19,63 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
 logger = logging.getLogger(__name__)
 
 
+class OutputKind(Flag):
+    ASM = auto()
+    OUTPUT = auto()
+    ALL = ASM | OUTPUT
+
+
+@dataclass
+class CompileResult:
+    ok: bool
+    header: str
+    asm: list[str]
+    output: list[str]
+
+    def to_messages(self, kind: OutputKind):
+        w = MessageWriter()
+        w.add_line(self.header)
+
+        if kind & OutputKind.ASM:
+            if not self.asm:
+                w.add_line('*Assembly*: void')
+            else:
+                w.add_line(f'*Assembly:*')
+                w.set_code_mode()
+                for line in self.asm:
+                    w.add_line(line)
+                w.set_plain_mode()
+
+        if kind & OutputKind.OUTPUT:
+            if not self.output:
+                w.add_line('*Output*: void')
+            else:
+                w.add_line(f'*Output*:')
+                w.set_code_mode()
+                for line in self.output:
+                    w.add_line(line)
+                w.set_plain_mode()
+
+        logger.info(f"Plain: {w.messages}")
+        return w.messages
+
+
 class MessageStore:
     def __init__(self) -> None:
         self._compiler_requests = {}
+        self._compiler_results = {}
 
     def add_request(self, key: Tuple[int, int], request: str) -> None:
         self._compiler_requests[key] = request
 
     def get_request(self, key: Tuple[int, int]) -> Optional[str]:
         return self._compiler_requests.get(key)
+
+    def add_result(self, key: Tuple[int, int], result: CompileResult):
+        self._compiler_results[key] = result
+
+    def get_result(self, key):
+        return self._compiler_results.get(key)
 
 
 class MessageWriter:
@@ -61,7 +111,6 @@ class MessageWriter:
 
 
 def lines_output(output):
-    """Join asm output lines into a single string"""
     return [escape_ansi(line['text']) for line in output]
 
 
@@ -91,7 +140,7 @@ def help(update: Update, context: CallbackContext):
         text, reply_to_message_id=update.message.message_id)
 
 
-def run_compiler(code, options):
+def run_compiler(code, options) -> CompileResult:
     payload = options
     payload['source'] = code
 
@@ -108,33 +157,11 @@ def run_compiler(code, options):
     reply = r.json()
     logger.debug(f"Response:\n{pformat(reply)}")
 
-    w = MessageWriter()
-
-    w.add_line(f'{compiler} {args} ' +
-               ('❌' if reply['code'] != 0 else '✅'))
-
-    asm = lines_output(reply['asm'])
-    if not asm:
-        w.add_line('*Assembly*: void')
-    else:
-        w.add_line(f'*Assembly:*')
-        w.set_code_mode()
-        for line in asm:
-            w.add_line(line)
-        w.set_plain_mode()
-
-    stderr = lines_output(reply['stderr'])
-    if not stderr:
-        w.add_line('*Output*: void')
-    else:
-        w.add_line(f'*Output*:')
-        w.set_code_mode()
-        for line in stderr:
-            w.add_line(line)
-        w.set_plain_mode()
-
-    logger.info(f"Plain: {w.messages}")
-    return w.messages
+    return CompileResult(
+        ok=reply['code'] == 0,
+        header=f'{compiler} {args} ' +
+        ('❌' if reply['code'] != 0 else '✅'),
+        asm=lines_output(reply['asm']), output=lines_output(reply['stderr']))
 
 
 def compile(update: Update, context):
@@ -193,9 +220,10 @@ def compile(update: Update, context):
                           message.reply_to_message.chat.id), json.dumps(options))
 
     result = run_compiler(code, options)
-    for msg in result:
-        message.reply_markdown(
+    for msg in result.to_messages(OutputKind.ALL):
+        reply = message.reply_markdown(
             msg, reply_to_message_id=code_message.message_id)
+        store.add_result((reply.message_id, reply.chat_id), result)
 
 
 def edited(update: Update, context: CallbackContext):
@@ -209,6 +237,32 @@ def edited(update: Update, context: CallbackContext):
     for msg in result:
         update.edited_message.reply_markdown(
             msg, reply_to_message_id=update.edited_message.message_id)
+
+
+def button_pressed(update: Update, context):
+    query = update.callback_query
+    query.answer()
+
+    result = store.get_result(
+        (query.message.message_id, query.message.chat_id))
+    if result is None:
+        return
+
+    if query.data == 'asm':
+        flag = OutputKind.ASM
+    else:
+        flag = OutputKind.OUTPUT
+
+    query.edit_message_text(text=result.to_messages(
+        flag)[0], reply_markup=create_keyboard(), parse_mode=ParseMode.MARKDOWN)
+
+
+def create_keyboard():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text='asm', callback_data='asm'),
+         InlineKeyboardButton(text='output', callback_data='output'),
+         ]
+    ])
 
 
 def show_link_contents(update: Update, context: CallbackContext, image=False):
@@ -288,6 +342,7 @@ def main() -> None:
 
     dispatcher.add_handler(MessageHandler(
         callback=edited, filters=Filters.text & Filters.update.edited_message))
+    dispatcher.add_handler(CallbackQueryHandler(button_pressed))
 
     # Add command for links
     dispatcher.add_handler(CommandHandler(
