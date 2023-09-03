@@ -139,11 +139,19 @@ def run_compiler(code, options):
 
 def compile(update: Update, context):
     """Compile the user's code using the Godbolt Compiler Explorer."""
-    # Get content of the message that the user replied to
-    logger.info(
-        f"Get code from message {update.message.reply_to_message.message_id} in chat {update.message.reply_to_message.chat.id}")
+    message = update.message or update.edited_message
 
-    args = update.message.text.split(maxsplit=1)
+    if message.reply_to_message is not None:
+        cmdline = message.text.split('\n', maxsplit=1)[0]
+        code = message.reply_to_message.text
+        code_message = message.reply_to_message
+    else:
+        cmdline, code = message.text.split('\n', maxsplit=1)
+        code_message = message
+    logger.info(
+        f"Get code from message {code_message.message_id} in chat {code_message.chat.id}")
+
+    args = cmdline.split(maxsplit=1)
     if len(args) > 1:
         command, compiler_args = args
     else:
@@ -156,8 +164,8 @@ def compile(update: Update, context):
         compiler_args = cr.default_options.get(compiler.name, "")
 
     if command.startswith('vcpp') or 'msvc' in compiler.title.lower():
-        update.message.reply_text(
-            "MSVC is not a compiler", reply_to_message_id=update.message.message_id)
+        message.reply_text(
+            "MSVC is not a compiler", reply_to_message_id=message.message_id)
         return
 
     options = {
@@ -180,17 +188,18 @@ def compile(update: Update, context):
         "allowStoreCodeDebug": True
     }
 
-    store.add_request((update.message.reply_to_message.message_id,
-                       update.message.reply_to_message.chat.id), json.dumps(options))
+    if message.reply_to_message is not None:
+        store.add_request((message.reply_to_message.message_id,
+                          message.reply_to_message.chat.id), json.dumps(options))
 
-    result = run_compiler(update.message.reply_to_message.text, options)
+    result = run_compiler(code, options)
     for msg in result:
-        update.message.reply_markdown(
-            msg, reply_to_message_id=update.message.reply_to_message.message_id)
+        message.reply_markdown(
+            msg, reply_to_message_id=code_message.message_id)
 
 
 def edited(update: Update, context: CallbackContext):
-    """Handle edited messages"""
+    """Handle edited messages which were replied"""
     payload = store.get_request(
         (update.edited_message.message_id, update.edited_message.chat.id))
     if not payload:
@@ -275,7 +284,7 @@ def main() -> None:
     for compiler in cr.compilers:
         logging.info(f'Adding command {compiler.command} - {compiler.title}')
         dispatcher.add_handler(CommandHandler(
-            compiler.command, compile, filters=Filters.reply & Filters.text))
+            compiler.command, compile, filters=Filters.text))
 
     dispatcher.add_handler(MessageHandler(
         callback=edited, filters=Filters.text & Filters.update.edited_message))
