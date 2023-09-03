@@ -25,6 +25,9 @@ class OutputKind(Flag):
     ALL = ASM | OUTPUT
 
 
+MESSAGE_LIMIT = 1
+
+
 @dataclass
 class CompileResult:
     ok: bool
@@ -220,7 +223,7 @@ def compile(update: Update, context):
                           message.reply_to_message.chat.id), json.dumps(options))
 
     result = run_compiler(code, options)
-    for msg in result.to_messages(OutputKind.ALL):
+    for msg in result.to_messages(OutputKind.ALL)[:MESSAGE_LIMIT]:
         reply = message.reply_markdown(
             msg, reply_to_message_id=code_message.message_id)
         store.add_result((reply.message_id, reply.chat_id), result)
@@ -234,7 +237,7 @@ def edited(update: Update, context: CallbackContext):
         return
     options = json.loads(payload)
     result = run_compiler(update.edited_message.text, options)
-    for msg in result.to_messages(OutputKind.ALL):
+    for msg in result.to_messages(OutputKind.ALL)[:MESSAGE_LIMIT]:
         update.edited_message.reply_markdown(
             msg, reply_to_message_id=update.edited_message.message_id)
 
