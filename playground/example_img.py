@@ -1,19 +1,30 @@
+from PIL import Image
 from io import BytesIO
+from pygments import highlight
+from pygments.formatters import ImageFormatter
+from pygments.lexers import get_lexer_by_name
+
+# Define the source code you want to highlight
+code = '''
 import os
 import re
-from typing import Optional, Tuple
+from dataclasses import dataclass
+from typing import Optional, Union, Tuple
 import logging
 import requests
-from telegram import MessageEntity, Update
+from telegram import Update, ParseMode, MessageEntity
 from telegram.ext import CommandHandler, Updater, CallbackContext, MessageHandler, Filters
+from telegram.utils.helpers import escape_markdown
+from ansi2html import Ansi2HTMLConverter
 from semver import Version
-from pprint import pformat
+from pprint import pprint, pformat
 import json
-from dotenv import load_dotenv
+
+conv = Ansi2HTMLConverter()
 
 # Set up logging
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-                    level=logging.DEBUG)
+                    level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
@@ -28,41 +39,9 @@ class MessageStore:
         return self._compiler_requests.get(key)
 
 
-class MessageWriter:
-    def __init__(self, max_size: int = 4096) -> None:
-        self.max_size = max_size
-        self.messages = [""]
-        self.code_mode = False
-
-    def add_line(self, line: str) -> None:
-        # Split line in parts not exceeding max_size
-        line = line + "\n"
-        while len(line) > self.max_size:
-            self._add_block(line[:self.max_size])
-            line = line[self.max_size:]
-        self._add_block(line)
-
-    def set_code_mode(self) -> None:
-        self.messages[-1] += "```\n"
-        self.code_mode = True
-
-    def set_plain_mode(self) -> None:
-        self.messages[-1] += "```\n"
-        self.code_mode = False
-
-    def _add_block(self, line: str) -> None:
-        if len(self.messages[-1]) + len(line) > self.max_size:
-            if self.code_mode:
-                self.messages[-1] += "```\n"
-            self.messages.append("")
-            if self.code_mode:
-                self.messages[-1] += "```\n"
-        self.messages[-1] += line
-
-
-def lines_output(output):
+def join_asm_output(asm_output):
     """Join asm output lines into a single string"""
-    return [escape_ansi(line['text']) for line in output]
+    return "\n".join(line['text'] for line in asm_output)
 
 
 def escape_ansi(text):
@@ -70,6 +49,80 @@ def escape_ansi(text):
     text = re.sub(r'\x1b\[([\d;]*?)m', '', text)
     text = text.replace('\x1b[K', '')
     return text
+
+
+def convert_ansi(text):
+    """Convert ANSI escape codes to HTML"""
+    # escape html tags
+    text = text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+
+    # find all ANSI escape codes
+    escape_pattern = re.compile(r'\x1b\[([\d;]*?)m')
+
+    # table which maps ANSI escape codes to HTML attributes
+    ansi_to_html = {
+        1: 'font-weight: bold',
+        4: 'text-decoration: underline',
+        7: 'text-decoration: reverse',
+        30: 'color: #000000',
+        31: 'color: #ff0000',
+        32: 'color: #00ff00',
+        33: 'color: #ffff00',
+        34: 'color: #0000ff',
+        35: 'color: #ff00ff',
+        36: 'color: #00ffff',
+        37: 'color: #ffffff',
+        40: 'background-color: #000000',
+        41: 'background-color: #ff0000',
+        42: 'background-color: #00ff00',
+        43: 'background-color: #ffff00',
+        44: 'background-color: #0000ff',
+        45: 'background-color: #ff00ff',
+        46: 'background-color: #00ffff',
+        47: 'background-color: #ffffff',
+    }
+
+    fragments = []
+    params = []
+    start = 0
+    for match in escape_pattern.finditer(text):
+        # Add the text fragment between the previous match and this one
+        plain_text = text[start:match.start()]
+        fragments.append((params, plain_text))
+        # Process the escape code for next fragment
+
+        def proces_param(param):
+            return int(param) if param else 0
+        params = [proces_param(s) for s in match.group(1).split(';')]
+        # Update the start index for the next fragment
+        start = match.end()
+
+    # Add the final text fragment
+    fragments.append((params, text[start:]))
+
+    logger.info(f"ANSI fragments: {fragments}")
+    print(fragments)
+
+    html = ""
+    html_attrs = []
+    for params, plain_text in fragments:
+        if 0 in params or params == []:
+            # Reset all attributes
+            html_attrs = []
+        else:
+            # Convert the escape code parameters to HTML attributes
+            html_attrs += [ansi_to_html[param]
+                           for param in params if param in ansi_to_html]
+
+        if not plain_text:
+            # Skip empty fragments
+            continue
+        # Add the text fragment to the output
+        if html_attrs:
+            html += f'<span style="{"; ".join(html_attrs)}">{plain_text}</span>'
+        else:
+            html += plain_text
+    return html
 
 
 def help(update: Update, context: CallbackContext):
@@ -107,33 +160,26 @@ def run_compiler(code, options):
     reply = r.json()
     logger.debug(f"Response:\n{pformat(reply)}")
 
-    w = MessageWriter()
+    result = f'{compiler} {args} '
+    if reply['code'] != 0:
+        result += '❌\n'
+    else:
+        result += '✅\n'
 
-    w.add_line(f'{compiler} {args} ' +
-               ('❌' if reply['code'] != 0 else '✅'))
-
-    asm = lines_output(reply['asm'])
+    asm = escape_ansi(join_asm_output(r.json()['asm']))
     if not asm:
-        w.add_line('*Assembly*: void')
+        result += '*Assembly*: void'
     else:
-        w.add_line(f'*Assembly:*')
-        w.set_code_mode()
-        for line in asm:
-            w.add_line(line)
-        w.set_plain_mode()
+        result += f'*Assembly:*\n```\n{asm}```\n'
 
-    stderr = lines_output(reply['stderr'])
+    stderr = escape_ansi(join_asm_output(r.json()['stderr']))
     if not stderr:
-        w.add_line('*Output*: void')
+        result += '*Output*: void'
     else:
-        w.add_line(f'*Output*:')
-        w.set_code_mode()
-        for line in stderr:
-            w.add_line(line)
-        w.set_plain_mode()
+        result += f'*Output*:\n```\n{stderr}```'
 
-    logger.info(f"Plain: {w.messages}")
-    return w.messages
+    logger.info("Plain:\n" + result)
+    return result
 
 
 def compile(update: Update, context):
@@ -183,9 +229,8 @@ def compile(update: Update, context):
                        update.message.reply_to_message.chat.id), json.dumps(options))
 
     result = run_compiler(update.message.reply_to_message.text, options)
-    for msg in result:
-        update.message.reply_markdown(
-            msg, reply_to_message_id=update.message.reply_to_message.message_id)
+    update.message.reply_markdown(
+        result, reply_to_message_id=update.message.reply_to_message.message_id)
 
 
 def edited(update: Update, context: CallbackContext):
@@ -196,23 +241,22 @@ def edited(update: Update, context: CallbackContext):
         return
     options = json.loads(payload)
     result = run_compiler(update.edited_message.text, options)
-    for msg in result:
-        update.edited_message.reply_markdown(
-            msg, reply_to_message_id=update.edited_message.message_id)
+    update.edited_message.reply_markdown(
+        result, reply_to_message_id=update.edited_message.message_id)
 
 
 def show_link_contents(update: Update, context: CallbackContext):
     """Display code from godblot.org links"""
 
-    links = re.findall(r'https://(\w+\.)?godbolt.org/z/(\w+)', update.message.text)
+    links = re.findall(r'https://godbolt.org/z/(\w+)', update.message.text)
     if not links and update.message.reply_to_message:
         links = re.findall(
-            r'https://(\w+\.)?godbolt.org/z/(\w+)', update.message.reply_to_message.text)
+            r'https://godbolt.org/z/(\w+)', update.message.reply_to_message.text)
     if not links:
         return
 
     logger.info(f"Links: {links}")
-    link = links[0][1]
+    link = links[0]
 
     r = requests.get(f'https://godbolt.org/api/shortlinkinfo/{link}')
     reply = r.json()
@@ -227,24 +271,22 @@ def show_link_contents(update: Update, context: CallbackContext):
 
 
 def render_to_image(update: Update, context: CallbackContext):
-    """Render code to an image using carbonara api"""
+    """Render code to an image using ray.so api"""
     if not update.message.reply_to_message:
         update.message.reply_text(
             "Reply to a message with code to render it to an image")
         return
 
-    for e in update.message.reply_to_message.parse_entities([MessageEntity.CODE, MessageEntity.PRE]):
-        code = update.message.reply_to_message.text[e.offset:e.offset+e.length]
-        break
-    else:
-        code = update.message.reply_to_message.text
-
+    code = update.message.reply_to_message.text
     logger.info(f"Rendering code:\n{code}")
-    r = requests.post('https://carbonara.solopov.dev/api/cook',
-                      json={'code': code, 'theme': 'one-dark', 'language': 'text/x-c++src'})
+
+    r = requests.post(
+        'https://ray.so/render',
+        json={'code': code},
+    )
     r.raise_for_status()
     update.message.reply_photo(
-        photo=BytesIO(r.content), reply_to_message_id=update.message.message_id)
+        r.content, reply_to_message_id=update.message.message_id)
 
 
 def error(update: Update, context: CallbackContext) -> None:
@@ -279,14 +321,7 @@ def main() -> None:
     dispatcher.add_error_handler(error)
 
     # Start the bot
-    if os.getenv('APP_ENVIRONMENT', '') == 'dev':
-        logger.info('Start polling')
-        updater.start_polling()
-    else:
-        logger.info('Starting webhook')
-        hook = os.environ['TELEGRAM_HOOK']
-        updater.start_webhook('0.0.0.0', port=8080, url_path=hook,
-                              webhook_url=f'https://godbot.fly.dev/{hook}')
+    updater.start_polling()
     updater.idle()
 
 
@@ -301,7 +336,7 @@ class Compiler:
         except ValueError:
             self.ver = ver
 
-    @staticmethod
+    @ staticmethod
     def get_name(compiler: str) -> str:
         if re.match(r'g\d+', compiler):
             return 'gcc'
@@ -310,7 +345,7 @@ class Compiler:
         else:
             return None
 
-    @staticmethod
+    @ staticmethod
     def clean_command(command: str) -> str:
         command = re.sub(r'[^a-zA-Z0-9_]', '_', command)
         return re.sub(r'_{2,}', '_', command)
@@ -416,8 +451,35 @@ class CompilerRegistry:
 
 
 if __name__ == '__main__':
-    load_dotenv()
     cr = CompilerRegistry()
     cr.load()
     store = MessageStore()
     main()
+
+'''
+
+# Choose the lexer for the language of your source code
+lexer = get_lexer_by_name('python')
+
+# Create an image formatter with your desired options
+options = {
+    'font_name': 'Consolas',
+    'font_size': 14,
+    'line_numbers': True,
+    'line_pad': 4,
+    'image_format': 'png',
+    'style': 'monokai',
+    'line_number_bg': '#272822', # set the background color of the line numbers
+    'line_number_fg': '#F8F8F2', # set the foreground color of the line numbers
+}
+formatter = ImageFormatter(**options)
+
+# Highlight the source code and format it as an image
+highlighted_code = highlight(code, lexer, formatter)
+
+# Save the image to a file or display it in your application
+with open('code.png', 'wb') as f:
+    f.write(highlighted_code)
+
+# Alternatively, display the image in your application
+Image.open(BytesIO(highlighted_code)).show()
