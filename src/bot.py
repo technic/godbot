@@ -234,7 +234,7 @@ def edited(update: Update, context: CallbackContext):
         return
     options = json.loads(payload)
     result = run_compiler(update.edited_message.text, options)
-    for msg in result:
+    for msg in result.to_messages(OutputKind.ALL):
         update.edited_message.reply_markdown(
             msg, reply_to_message_id=update.edited_message.message_id)
 
@@ -325,7 +325,7 @@ def generate_image(code: str):
     return BytesIO(r.content)
 
 
-def error(update: Update, context: CallbackContext) -> None:
+def error(update: object, context: CallbackContext) -> None:
     logger.warning('Update "%s" caused error "%s"', update, context.error)
 
 
@@ -341,7 +341,7 @@ def main() -> None:
             compiler.command, compile, filters=Filters.text))
 
     dispatcher.add_handler(MessageHandler(
-        callback=edited, filters=Filters.text & Filters.update.edited_message))
+        callback=edited, filters=Filters.text & Filters.update))
     dispatcher.add_handler(CallbackQueryHandler(button_pressed))
 
     # Add command for links
@@ -373,7 +373,7 @@ def main() -> None:
 
 
 class Compiler:
-    def __init__(self, id: str, ver: str, title: str, command: str = None) -> None:
+    def __init__(self, id: str, ver: str, title: str, command: Optional[str] = None) -> None:
         self.id = id
         self.title = title
         self.command = self.clean_command(command if command else id)
@@ -384,7 +384,7 @@ class Compiler:
             self.ver = ver
 
     @staticmethod
-    def get_name(compiler: str) -> str:
+    def get_name(compiler: str) -> Optional[str]:
         if re.match(r'g\d+', compiler):
             return 'gcc'
         elif re.match(r'clang\d+', compiler):
@@ -458,19 +458,15 @@ class CompilerRegistry:
     def get_compiler(self, name: str, version: str) -> Compiler:
         # check if version is semver
         try:
-            ver = Version(version)
+            ver = Version.parse(version)
         except ValueError:
             ver = version
 
         if isinstance(ver, str):
             # find compiler with the same name and version
-            self.get_compiler_exact(name, ver)
+            return self.get_compiler_exact(name, ver)
         else:
-            parts = [int(part) for part in version.split('.')]
-            # bump last part of version
-            parts[-1] += 1
-            maxVer = Version('.'.join(parts))
-
+            maxVer = ver.bump_patch()
             # find latest compiler matching semver spec and name
             bestVer = None
             for compiler in self.compilers:
@@ -485,7 +481,7 @@ class CompilerRegistry:
     def get_compiler_exact(self, name: str, version: str) -> Compiler:
         # check if version is semver
         try:
-            ver = Version(version)
+            ver = Version.parse(version)
         except ValueError:
             ver = version
 
