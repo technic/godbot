@@ -344,7 +344,7 @@ def main() -> None:
             compiler.command, compile, filters=Filters.text))
 
     dispatcher.add_handler(MessageHandler(
-        callback=edited, filters=Filters.text & Filters.update))
+        callback=edited, filters=Filters.text & Filters.update.edited_message))
     dispatcher.add_handler(CallbackQueryHandler(button_pressed))
 
     # Add command for links
