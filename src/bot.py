@@ -85,6 +85,7 @@ def help(update: Update, context: CallbackContext):
         text += f" /{compiler.command} - {compiler.title}\n"
     text += "<b>Full list</b>: https://godbolt.org/api/compilers/c++\n"
     text += "/show Shows source code from the godbolt link\n"
+    text += "/showimg Displays source code from the godbolt link\n"
     logger.info(text)
     update.message.reply_html(
         text, reply_to_message_id=update.message.message_id)
@@ -201,10 +202,11 @@ def edited(update: Update, context: CallbackContext):
             msg, reply_to_message_id=update.edited_message.message_id)
 
 
-def show_link_contents(update: Update, context: CallbackContext):
+def show_link_contents(update: Update, context: CallbackContext, image=False):
     """Display code from godblot.org links"""
 
-    links = re.findall(r'https://(\w+\.)?godbolt.org/z/(\w+)', update.message.text)
+    links = re.findall(
+        r'https://(\w+\.)?godbolt.org/z/(\w+)', update.message.text)
     if not links and update.message.reply_to_message:
         links = re.findall(
             r'https://(\w+\.)?godbolt.org/z/(\w+)', update.message.reply_to_message.text)
@@ -219,11 +221,19 @@ def show_link_contents(update: Update, context: CallbackContext):
     logger.debug(pformat(reply))
 
     code = reply['sessions'][0]['source']
-    result = f'*Code*:\n```\n{code}```\n'
-    logger.info("Plain:\n" + result)
 
-    update.message.reply_markdown(
-        result, reply_to_message_id=update.message.message_id)
+    if not image:
+        result = f'*Code*:\n```\n{code}```\n'
+        logger.info("Plain:\n" + result)
+        update.message.reply_markdown(
+            result, reply_to_message_id=update.message.message_id)
+    else:
+        update.message.reply_photo(
+            generate_image(code), reply_to_message_id=update.message.message_id)
+
+
+def show_link_contents_img(update: Update, context: CallbackContext):
+    show_link_contents(update, context, image=True)
 
 
 def render_to_image(update: Update, context: CallbackContext):
@@ -239,12 +249,17 @@ def render_to_image(update: Update, context: CallbackContext):
     else:
         code = update.message.reply_to_message.text
 
+    update.message.reply_photo(
+        photo=generate_image(code), reply_to_message_id=update.message.message_id)
+
+
+def generate_image(code: str):
     logger.info(f"Rendering code:\n{code}")
     r = requests.post('https://carbonara.solopov.dev/api/cook',
-                      json={'code': code, 'theme': 'one-dark', 'language': 'text/x-c++src'})
+                      json={'code': code, 'theme': 'one-dark', 'language': 'text/x-c++src',
+                            'paddingVertical': '10px', 'paddingHorizontal': '10px'})
     r.raise_for_status()
-    update.message.reply_photo(
-        photo=BytesIO(r.content), reply_to_message_id=update.message.message_id)
+    return BytesIO(r.content)
 
 
 def error(update: Update, context: CallbackContext) -> None:
@@ -268,6 +283,9 @@ def main() -> None:
     # Add command for links
     dispatcher.add_handler(CommandHandler(
         'show', show_link_contents, filters=Filters.text))
+
+    dispatcher.add_handler(CommandHandler(
+        'showimg', show_link_contents_img, filters=Filters.text))
 
     # Add command for rendering code to image
     dispatcher.add_handler(CommandHandler(
