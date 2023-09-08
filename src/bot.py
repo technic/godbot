@@ -224,7 +224,7 @@ def compile(update: Update, context):
                           message.reply_to_message.chat.id), json.dumps(options))
 
     result = run_compiler(code, options)
-    for msg in result.to_messages(OutputKind.ALL)[:MESSAGE_LIMIT]:
+    for msg in result.to_messages(OutputKind.ALL if result.ok else OutputKind.OUTPUT)[:MESSAGE_LIMIT]:
         reply = message.reply_markdown(
             msg, reply_to_message_id=code_message.message_id)
         store.add_result((reply.message_id, reply.chat_id), result)
