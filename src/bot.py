@@ -43,7 +43,7 @@ class CompileResult:
             if not self.asm:
                 w.add_line('*Assembly*: void')
             else:
-                w.add_line(f'*Assembly:*')
+                w.add_line('*Assembly:*')
                 w.set_code_mode()
                 for line in self.asm:
                     w.add_line(line)
@@ -53,7 +53,7 @@ class CompileResult:
             if not self.output:
                 w.add_line('*Output*: void')
             else:
-                w.add_line(f'*Output*:')
+                w.add_line('*Output*:')
                 w.set_code_mode()
                 for line in self.output:
                     w.add_line(line)
@@ -256,8 +256,8 @@ def button_pressed(update: Update, context):
     else:
         flag = OutputKind.OUTPUT
 
-    query.edit_message_text(text=result.to_messages(
-        flag)[0], reply_markup=create_keyboard(), parse_mode=ParseMode.MARKDOWN)
+    query.edit_message_text(
+        text=result.to_messages(flag)[0], reply_markup=create_keyboard(), parse_mode=ParseMode.MARKDOWN)
 
 
 def create_keyboard():
@@ -446,7 +446,8 @@ class CompilerRegistry:
     def _add_latest_compiler(self, name: str):
         latest = None
         for compiler in self.compilers:
-            if compiler.name == name and isinstance(compiler.ver, Version) and (latest is None or compiler.ver > latest.ver):
+            if compiler.name == name and isinstance(compiler.ver, Version) \
+                    and (latest is None or compiler.ver > latest.ver):
                 latest = compiler
         if latest:
             self.compilers.append(
