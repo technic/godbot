@@ -454,7 +454,7 @@ class CompilerRegistry:
         if latest:
             self.compilers.append(
                 Compiler(id=latest.id, ver='(latest)', title=latest.title, command=name))
-            
+
     def _add_complier_aliases(self):
         aliases = []
         for c in self.compilers:
@@ -471,8 +471,9 @@ class CompilerRegistry:
                 if not ver_parts:
                     continue
 
-                aliases.append(Compiler(id=c.id, ver=str(c.ver), title=c.title, command=f'{c.name}-{"_".join(ver_parts)}'))
-        
+                aliases.append(Compiler(id=c.id, ver=str(c.ver), title=c.title,
+                                        command=f'{c.name}-{"_".join(ver_parts)}'))
+
         self.compilers += aliases
 
     def get_compiler_by_command(self, command: str):
