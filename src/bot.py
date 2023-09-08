@@ -289,7 +289,7 @@ def show_link_contents(update: Update, context: CallbackContext, image=False):
     code = reply['sessions'][0]['source']
 
     if not image:
-        result = f'*Code*:\n```\n{code}```\n'
+        result = f'*// Code*:\n```\n{code}```\n'
         logger.info("Plain:\n" + result)
         update.message.reply_markdown(
             result, reply_to_message_id=update.message.message_id)
