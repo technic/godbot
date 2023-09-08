@@ -136,6 +136,7 @@ def help(update: Update, context: CallbackContext):
     for compiler in compilers:
         text += f" /{compiler.command} - {compiler.title}\n"
     text += "<b>Full list</b>: https://godbolt.org/api/compilers/c++\n"
+    text += "Alternatively format like /gcc_10_1 is supported\n"
     text += "/show Shows source code from the godbolt link\n"
     text += "/showimg Displays source code from the godbolt link\n"
     logger.info(text)
@@ -427,7 +428,6 @@ class CompilerRegistry:
         }
 
     def load(self):
-        # send request to https://godbolt.org/api/compilers/c++
         r = requests.get('https://godbolt.org/api/compilers/c++',
                          headers={"Accept": "application/json"})
         # pprint(r.json())
@@ -442,6 +442,8 @@ class CompilerRegistry:
         # Add aliases to latest gcc and clang
         self._add_latest_compiler('gcc')
         self._add_latest_compiler('clang')
+        # Add more friendly aliases
+        self._add_complier_aliases()
 
     def _add_latest_compiler(self, name: str):
         latest = None
@@ -452,6 +454,26 @@ class CompilerRegistry:
         if latest:
             self.compilers.append(
                 Compiler(id=latest.id, ver='(latest)', title=latest.title, command=name))
+            
+    def _add_complier_aliases(self):
+        aliases = []
+        for c in self.compilers:
+            if isinstance(c.ver, Version):
+                t = c.ver.to_tuple()
+                if not all(part is None for part in t[3:]):
+                    continue
+
+                ver_parts = []
+                for part in t[:3]:
+                    if part == 0:
+                        break
+                    ver_parts.append(str(part))
+                if not ver_parts:
+                    continue
+
+                aliases.append(Compiler(id=c.id, ver=str(c.ver), title=c.title, command=f'{c.name}-{"_".join(ver_parts)}'))
+        
+        self.compilers += aliases
 
     def get_compiler_by_command(self, command: str):
         for compiler in self.compilers:
