@@ -174,11 +174,15 @@ def compile(update: Update, context):
 
     if message.reply_to_message is not None:
         cmdline = message.text.split('\n', maxsplit=1)[0]
-        code = message.reply_to_message.text
         code_message = message.reply_to_message
+        for e in code_message.parse_entities([MessageEntity.CODE, MessageEntity.PRE]):
+            code = code_message.text[e.offset:e.offset+e.length]
+            break
+        else:
+            code = code_message.text
     else:
-        cmdline, code = message.text.split('\n', maxsplit=1)
         code_message = message
+        cmdline, code = message.text.split('\n', maxsplit=1)
     logger.info(
         f"Get code from message {code_message.message_id} in chat {code_message.chat.id}")
 
