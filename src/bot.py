@@ -128,7 +128,7 @@ def help(update: Update, context: CallbackContext):
     """Return list of available compilers"""
     text = "<u><b>Available compilers</b></u>\n"
     compilers = []
-    for name in ['gcc', 'gsnapshot', 'clang', 'clang_trunk']:
+    for name in ['gcc', 'gsnapshot', 'clang', 'clang_trunk', 'feed']:
         try:
             compilers.append(cr.get_compiler_by_command(name))
         except ValueError:
@@ -151,11 +151,12 @@ def run_compiler(code, options) -> CompileResult:
     logger.info(f"Compiling code:\n{code}")
 
     compiler = options['compiler']
+    host = options['host']
     args = options['options']['userArguments']
 
     # Make a POST request to the Godbolt API
     r = requests.post(
-        f'https://godbolt.org/api/compiler/{compiler}/compile', json=payload,
+        f'{host}/api/compiler/{compiler}/compile', json=payload,
         headers={'Accept': 'application/json'}
     )
     reply = r.json()
@@ -204,6 +205,7 @@ def compile(update: Update, context):
         return
 
     options = {
+        "host": compiler.host,
         "compiler": compiler.id,
         "options": {
             "userArguments": compiler_args,
@@ -381,10 +383,11 @@ def main() -> None:
 
 
 class Compiler:
-    def __init__(self, id: str, ver: str, title: str, command: Optional[str] = None) -> None:
+    def __init__(self, id: str, ver: str, title: str, command: Optional[str] = None, host: str = 'https://godbolt.org') -> None:
         self.id = id
         self.title = title
         self.command = self.clean_command(command if command else id)
+        self.host = host
         self.name = self.get_name(id)
         try:
             self.ver = Version.parse(ver, optional_minor_and_patch=True)
@@ -397,6 +400,8 @@ class Compiler:
             return 'gcc'
         elif re.match(r'clang\d+', compiler):
             return 'clang'
+        elif compiler == 'gdefault':
+            return 'gcc-eee'
         else:
             return None
 
@@ -428,6 +433,7 @@ class CompilerRegistry:
         self.compilers = []
         self.default_options = {
             'gcc': '-std=gnu++20 -Wall -Wextra -O2',
+            'gcc-eee': '-std=gnu++26 -Wall -Wextra -O2 -fstatic-exceptions',
             'clang': '-std=gnu++20 -Wall -Wextra -O2',
         }
 
@@ -448,6 +454,13 @@ class CompilerRegistry:
         self._add_latest_compiler('clang')
         # Add more friendly aliases
         self._add_complier_aliases()
+
+        r = requests.get('https://gcc.ukrain.ee/api/compilers/c++', headers={"Accept": "application/json"})
+        for compiler in r.json():
+            if compiler['lang'] == 'c++' and compiler['instructionSet'] == 'amd64':
+                self.compilers.append(
+                    Compiler(id=compiler['id'], ver=compiler['semver'], title=compiler['name'],
+                             host='https://gcc.ukrain.ee', command='feed'))
 
     def _add_latest_compiler(self, name: str):
         latest = None
